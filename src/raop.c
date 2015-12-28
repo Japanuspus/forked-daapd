@@ -1140,9 +1140,14 @@ raop_add_headers(struct raop_session *rs, struct evrtsp_request *req, enum evrts
       return -1;
     }
 
-  snprintf(buf, sizeof(buf), "%" PRIX64, libhash);
+  snprintf(buf, sizeof(buf), "%016" PRIX64, libhash);
   evrtsp_add_header(req->output_headers, "Client-Instance", buf);
   evrtsp_add_header(req->output_headers, "DACP-ID", buf);
+
+  /* Add dummy Active-remote header */
+  snprintf(buf, sizeof(buf), "%s", "1234512345");
+  evrtsp_add_header(req->output_headers, "Active-Remote", buf);  
+  DPRINTF(E_DBG, L_RAOP, "Active-Remote header: %s\n", buf);
 
   if (rs->session)
     evrtsp_add_header(req->output_headers, "Session", rs->session);

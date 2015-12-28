@@ -320,6 +320,32 @@ register_services(char *ffid, int no_rsp, int no_daap, int mdns_no_mpd)
   if (ret < 0)
     return ret;
 
+  /* Register DACP service for remote to send control signals to.
+   * Service name must be iTunes_Ctrl_<DACP-ID>, where DACP-ID matches
+   * the value sent out through RTSP.
+   * Normally, DACP-ID will be different from the DBID
+   */
+
+  memset(txtrecord, NULL, sizeof(txtrecord));
+  for (i = 0; i < (sizeof(records) / sizeof(records[0])); i++)
+  {
+      memset(records[i], 0, 128);
+      txtrecord[i] = records[i];
+  }
+  snprintf(txtrecord[0], 128, "txtvers=1");
+  snprintf(txtrecord[1], 128, "DbId=%016" PRIX64, libhash);
+  snprintf(txtrecord[2], 128, "Ver=131073"); /* iTunes 6.0.4 */
+  snprintf(txtrecord[3], 128, "OSsi=0x1F5"); /* Magic number! Yay! */
+  txtrecord[4] = NULL; /* terminator, use 5 for service name buffer */
+  snprintf(txtrecord[5], 128, "iTunes_Ctrl_%016" PRIX64, libhash);
+
+
+  ret = mdns_register(records[5], "_dacp._tcp", port, txtrecord);
+  if (ret < 0)
+    return ret;
+
+
+
   /* Register MPD serivce */
   mpd = cfg_getsec(cfg, "mpd");
   mpd_port = cfg_getint(mpd, "port");

@@ -91,6 +91,13 @@ struct daap_session {
   struct daap_session *next;
 };
 
+static struct daap_session ActiveRemote_daap_session = {
+  .id = 1234567,
+  .user_agent = "none",
+  .mtime = 0,
+  .next = NULL
+};
+
 struct daap_update_request {
   struct evhttp_request *req;
 
@@ -252,6 +259,7 @@ struct daap_session *
 daap_session_find(struct evhttp_request *req, struct evkeyvalq *query, struct evbuffer *evbuf)
 {
   struct daap_session *s;
+  struct evkeyvalq *headers;
   const char *param;
   int id;
   int ret;
@@ -262,7 +270,15 @@ daap_session_find(struct evhttp_request *req, struct evkeyvalq *query, struct ev
   param = evhttp_find_header(query, "session-id");
   if (!param)
     {
-      DPRINTF(E_WARN, L_DAAP, "No session-id specified in request\n");
+      headers = evhttp_request_get_input_headers(req);
+      param = evhttp_find_header(headers, "Active-Remote");
+      if (param)
+        {
+        DPRINTF(E_WARN, L_DAAP, "No session-id specified in request. But Active-Remote\n");
+        return &ActiveRemote_daap_session;
+        }
+      else
+        DPRINTF(E_WARN, L_DAAP, "No session-id specified in request\n");
       goto invalid;
     }
 
