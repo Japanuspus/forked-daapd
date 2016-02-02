@@ -1,6 +1,6 @@
 dnl Process this file with autoconf to produce a configure script.
 
-AC_INIT([forked-daapd], [23.3])
+AC_INIT([forked-daapd], [23.4])
 AC_CONFIG_SRCDIR([config.h.in])
 AC_CONFIG_MACRO_DIR([m4])
 AC_CONFIG_HEADERS([config.h])
@@ -88,7 +88,7 @@ PKG_CHECK_MODULES(LIBAV, [ libavformat libavcodec libswscale libavutil libavfilt
 dnl Checks for misc libav and ffmpeg API differences
 save_LIBS="$LIBS"
 AC_CHECK_LIB([avcodec], [avcodec_find_best_pix_fmt_of_list],
-	AC_DEFINE(HAVE_FFMPEG, 1, [Define to 1 if you have ffmpeg/libav with avcodec_find_best_pix_fmt_of_list]))
+	AC_DEFINE(HAVE_FFMPEG, 1, [Define to 1 if you have ffmpeg/libav with avcodec_find_best_pix_fmt_of_list]),,[-lavutil])
 
 AC_CHECK_LIB([avfilter], [av_buffersrc_add_frame_flags],
 	AC_DEFINE(HAVE_LIBAV_BUFFERSRC_ADD_FRAME_FLAGS, 1, [Define to 1 if you have ffmpeg/libav with av_buffersrc_add_frame_flags]))
@@ -96,14 +96,20 @@ AC_CHECK_LIB([avfilter], [av_buffersink_get_frame],
 	AC_DEFINE(HAVE_LIBAV_BUFFERSINK_GET_FRAME, 1, [Define to 1 if you have ffmpeg/libav with av_buffersink_get_frame]))
 AC_CHECK_LIB([avfilter], [avfilter_graph_parse_ptr],
 	AC_DEFINE(HAVE_LIBAV_GRAPH_PARSE_PTR, 1, [Define to 1 if you have ffmpeg/libav with avfilter_graph_parse_ptr]))
+AC_CHECK_LIB([avcodec], [av_packet_unref],
+	AC_DEFINE(HAVE_LIBAV_PACKET_UNREF, 1, [Define to 1 if you have ffmpeg/libav with av_packet_unref]),,[-lavutil])
 AC_CHECK_LIB([avcodec], [av_packet_rescale_ts],
-	AC_DEFINE(HAVE_LIBAV_PACKET_RESCALE_TS, 1, [Define to 1 if you have ffmpeg/libav with av_packet_rescale_ts]))
+	AC_DEFINE(HAVE_LIBAV_PACKET_RESCALE_TS, 1, [Define to 1 if you have ffmpeg/libav with av_packet_rescale_ts]),,[-lavutil])
 AC_CHECK_LIB([avformat], [avformat_alloc_output_context2],
 	AC_DEFINE(HAVE_LIBAV_ALLOC_OUTPUT_CONTEXT2, 1, [Define to 1 if you have ffmpeg/libav with avformat_alloc_output_context2]))
 AC_CHECK_LIB([avutil], [av_frame_alloc],
 	AC_DEFINE(HAVE_LIBAV_FRAME_ALLOC, 1, [Define to 1 if you have ffmpeg/libav with av_frame_alloc]))
 AC_CHECK_LIB([avutil], [av_frame_get_best_effort_timestamp],
 	AC_DEFINE(HAVE_LIBAV_BEST_EFFORT_TIMESTAMP, 1, [Define to 1 if you have ffmpeg/libav with av_frame_get_best_effort_timestamp]))
+AC_CHECK_LIB([avutil], [av_image_fill_arrays],
+	AC_DEFINE(HAVE_LIBAV_IMAGE_FILL_ARRAYS, 1, [Define to 1 if you have ffmpeg/libav with av_image_fill_arrays]))
+AC_CHECK_LIB([avutil], [av_image_get_buffer_size],
+	AC_DEFINE(HAVE_LIBAV_IMAGE_GET_BUFFER_SIZE, 1, [Define to 1 if you have ffmpeg/libav with av_image_get_buffer_size]))
 
 AC_CHECK_HEADERS([libavutil/channel_layout.h])
 AC_CHECK_HEADERS([libavutil/mathematics.h])
@@ -177,11 +183,11 @@ AS_IF([test "x$enable_lastfm" = "xyes"], [
 AM_CONDITIONAL(COND_LASTFM, [test "x$enable_lastfm" = "xyes"])
 
 dnl MPD support
-AC_ARG_ENABLE(mpd, AS_HELP_STRING([--enable-mpd], [enable MPD client protocol support (default=no)]))
-AS_IF([test "x$enable_mpd" = "xyes"], [
+AC_ARG_ENABLE(mpd, AS_HELP_STRING([--disable-mpd], [disable MPD client protocol support (default=no)]))
+AS_IF([test "x$enable_mpd" != "xno"], [
 	CPPFLAGS="${CPPFLAGS} -DMPD"
 ])
-AM_CONDITIONAL(COND_MPD, [test "x$enable_mpd" = "xyes"])
+AM_CONDITIONAL(COND_MPD, [test "x$enable_mpd" != "xno"])
 dnl --- End options ---
 
 dnl Selection of local audio sound system

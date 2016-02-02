@@ -30,12 +30,13 @@
 #include <libavfilter/buffersink.h>
 #include <libavfilter/buffersrc.h>
 #include <libavutil/opt.h>
+#include <libavutil/time.h>
 #include <libavutil/pixdesc.h>
 
 #ifdef HAVE_LIBAVFILTER
 # include <libavfilter/avcodec.h>
 #else
-# include "ffmpeg-compat.c"
+# include "ffmpeg-compat.h"
 #endif
 
 #include "logger.h"
@@ -50,6 +51,8 @@
 #define MAX_STREAMS 64
 // Maximum number of times we retry when we encounter bad packets
 #define MAX_BAD_PACKETS 5
+// How long to wait (in microsec) before interrupting av_read_frame
+#define READ_TIMEOUT 10000000
 
 static char *default_codecs = "mpeg,wav";
 static char *roku_codecs = "mpeg,mp4a,wma,wav";
@@ -79,6 +82,9 @@ struct decode_ctx {
   AVPacket packet;
   int resume;
   int resume_offset;
+
+  // Used to measure if av_read_frame is taking too long
+  int64_t timestamp;
 };
 
 struct encode_ctx {
@@ -247,6 +253,29 @@ decode_stream(struct decode_ctx *ctx, AVStream *in_stream)
           (in_stream == ctx->subtitle_stream));
 }
 
+/*
+ * Called by libavformat while demuxing. Used to interrupt/unblock av_read_frame
+ * in case a source (especially a network stream) becomes unavailable.
+ * 
+ * @in arg        Will point to the decode context
+ * @return        Non-zero if av_read_frame should be interrupted
+ */
+static int decode_interrupt_cb(void *arg)
+{
+  struct decode_ctx *ctx;
+
+  ctx = (struct decode_ctx *)arg;
+
+  if (av_gettime() - ctx->timestamp > READ_TIMEOUT)
+    {
+      DPRINTF(E_LOG, L_XCODE, "Timeout while reading source (connection problem?)\n");
+
+      return 1;
+    }
+
+  return 0;
+}
+
 /* Will read the next packet from the source, unless we are in resume mode, in
  * which case the most recent packet will be returned, but with an adjusted data
  * pointer. Use ctx->resume and ctx->resume_offset to make the function resume
@@ -256,7 +285,7 @@ decode_stream(struct decode_ctx *ctx, AVStream *in_stream)
  *                packet will be updated, and packet->data is pointed to the data
  *                returned by av_read_frame(). The packet struct is owned by the
  *                caller, but *not* packet->data, so don't free the packet with
- *                av_free_packet()
+ *                av_free_packet()/av_packet_unref()
  * @out stream    Set to the input AVStream corresponding to the packet
  * @out stream_index
  *                Set to the input stream index corresponding to the packet
@@ -285,8 +314,10 @@ read_packet(AVPacket *packet, AVStream **stream, unsigned int *stream_index, str
 	{
 	  // We are going to read a new packet from source, so now it is safe to
 	  // discard the previous packet and reset resume_offset
-	  av_free_packet(&ctx->packet);
+	  av_packet_unref(&ctx->packet);
+
 	  ctx->resume_offset = 0;
+	  ctx->timestamp = av_gettime();
 
 	  ret = av_read_frame(ctx->ifmt_ctx, &ctx->packet);
 	  if (ret < 0)
@@ -551,22 +582,31 @@ open_input(struct decode_ctx *ctx, struct media_file_info *mfi, int decode_video
   int ret;
 
   options = NULL;
-  ctx->ifmt_ctx = NULL;
+  ctx->ifmt_ctx = avformat_alloc_context();;
+  if (!ctx->ifmt_ctx)
+    {
+      DPRINTF(E_LOG, L_XCODE, "Out of memory for input format context\n");
+      return -1;
+    }
 
 # ifndef HAVE_FFMPEG
   // Without this, libav is slow to probe some internet streams, which leads to RAOP timeouts
   if (mfi->data_kind == DATA_KIND_HTTP)
-    {
-      ctx->ifmt_ctx = avformat_alloc_context();
-      ctx->ifmt_ctx->probesize = 64000;
-    }
+    ctx->ifmt_ctx->probesize = 64000;
 # endif
   if (mfi->data_kind == DATA_KIND_HTTP)
     av_dict_set(&options, "icy", "1", 0);
 
+  // TODO Newest versions of ffmpeg have timeout and reconnect options we should use
+  ctx->ifmt_ctx->interrupt_callback.callback = decode_interrupt_cb;
+  ctx->ifmt_ctx->interrupt_callback.opaque = ctx;
+  ctx->timestamp = av_gettime();
+
   ret = avformat_open_input(&ctx->ifmt_ctx, mfi->path, NULL, &options);
+
   if (options)
     av_dict_free(&options);
+
   if (ret < 0)
     {
       DPRINTF(E_LOG, L_XCODE, "Cannot open input path\n");
@@ -685,7 +725,7 @@ open_output(struct encode_ctx *ctx, struct decode_ctx *src_ctx)
       goto out_fail_evbuf;
     }
 
-  ctx->ofmt_ctx->pb = avio_evbuffer_open(ctx->obuf);
+  ctx->ofmt_ctx->pb = avio_output_evbuffer_open(ctx->obuf);
   if (!ctx->ofmt_ctx->pb)
     {
       DPRINTF(E_LOG, L_XCODE, "Could not create output avio pb\n");
@@ -1401,7 +1441,7 @@ transcode_needed(const char *user_agent, const char *client_codecs, char *file_c
 void
 transcode_decode_cleanup(struct decode_ctx *ctx)
 {
-  av_free_packet(&ctx->packet);
+  av_packet_unref(&ctx->packet);
   close_input(ctx);
   free(ctx);
 }
@@ -1476,7 +1516,7 @@ transcode_decode(struct decoded_frame **decoded, struct decode_ctx *ctx)
 	{
 	  // Some decoders need to be flushed, meaning the decoder is to be called
 	  // with empty input until no more frames are returned
-	  DPRINTF(E_DBG, L_XCODE, "Could not read packet (eof?), will flush decoders\n");
+	  DPRINTF(E_DBG, L_XCODE, "Could not read packet, will flush decoders\n");
 
 	  used = 1;
 	  got_frame = flush_decoder(frame, &in_stream, &stream_index, ctx);
@@ -1695,7 +1735,9 @@ transcode_seek(struct transcode_ctx *ctx, int ms)
   in_stream->codec->skip_frame = AVDISCARD_NONREF;
   while (1)
     {
-      av_free_packet(&decode_ctx->packet);
+      av_packet_unref(&decode_ctx->packet);
+
+      decode_ctx->timestamp = av_gettime();
 
       ret = av_read_frame(decode_ctx->ifmt_ctx, &decode_ctx->packet);
       if (ret < 0)
